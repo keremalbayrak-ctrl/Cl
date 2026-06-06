@@ -51,6 +51,11 @@ bypass them:
 - `wealth_exposure/watchers/` — `base.Watcher` interface, concrete watchers
   (`feeds.py`: register-change, counterparty-filing, sanctions-update) and a
   `runner.WatcherRunner`. Each maps a public change to consent-scoped flags only.
+- `wealth_exposure/collectors/register.py` + `registry.py` + `orchestrator.py` —
+  generic `RegisterCollector` (any allowlisted source via an adapter),
+  `CollectorRegistry` (builds collectors for automatable sources; others
+  manual-only), and `ExposureRun` (full per-client sweep, gated to
+  `consent.subjects_for(client_id, ...)`).
 - `wealth_exposure/exposure_register.py` — per-client living record.
 
 ## Non-negotiable invariants (do not weaken)

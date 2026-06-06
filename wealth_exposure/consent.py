@@ -72,6 +72,15 @@ class ConsentScope:
         table = self._table(subject.kind)
         return None if table is None else table.get(subject.identifier)
 
+    def subjects_for(self, client_id: str, kind: str):
+        """Return the identifiers of `kind` this client declared as their own."""
+        if kind == "person":
+            return [client_id] if client_id in self.clients else []
+        table = self._table(kind)
+        if table is None:
+            return []
+        return [value for value, owner in table.items() if owner == client_id]
+
     def _table(self, kind: str):
         return {
             "person": self.clients,

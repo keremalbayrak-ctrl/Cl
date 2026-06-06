@@ -64,6 +64,11 @@ are the product.
   labelled "unconfirmed by firm".
 - **Foresight watchers** (`watchers/`) — register changes, counterparty
   filings, sanctions-list updates → flags, each scoped to the client.
+- **Full run** (`registry.py`, `orchestrator.py`, `collectors/register.py`) — a
+  generic `RegisterCollector` covers any allowlisted source via an adapter; the
+  `CollectorRegistry` builds collectors for every automatable source (others are
+  flagged manual-only); `ExposureRun` sweeps all of a client's own subjects in
+  one call. Adding a country is configuration, not bespoke code.
 - **Exposure register** (`exposure_register.py`) — per-client living record.
 
 ## Layout
@@ -83,7 +88,7 @@ are the product.
 ## Run
 
 ```bash
-python -m pytest          # 41 guardrail + module tests
+python -m pytest          # 45 guardrail + module tests
 python examples/demo.py   # end-to-end demo with stub providers (no network)
 ```
 

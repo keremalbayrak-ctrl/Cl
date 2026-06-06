@@ -22,6 +22,8 @@ from wealth_exposure.counterparty import CounterpartyRiskAssessor
 from wealth_exposure.exposure_register import ExposureItem, ExposureRegister
 from wealth_exposure.guardrails import GuardrailViolation, Subject
 from wealth_exposure.inference.regulatory_scope import RuleScope, probability_in_scope
+from wealth_exposure.orchestrator import ExposureRun
+from wealth_exposure.registry import CollectorRegistry
 from wealth_exposure.resolver import Resolver
 from wealth_exposure.watchers.feeds import CounterpartyFilingWatcher, RegisterChangeWatcher
 from wealth_exposure.watchers.runner import WatcherRunner
@@ -101,6 +103,22 @@ def main() -> None:
     # Regulatory-scope inference about a FIRM (public criteria only).
     rule = RuleScope("FCA-PS25-12-safeguarding", {"permission": "emoney_institution"})
     print("Reg-scope inference:", probability_in_scope(rule, {"permission": "emoney_institution"})["label"])
+
+    # Full multi-jurisdiction sweep: one generic collector, many registers, one
+    # orchestrated run — all gated to the client's own declared subjects.
+    class StubAdapter:
+        def __init__(self, name): self.name = name
+        def fetch(self, identifier): return [{"register": self.name, "id": identifier}]
+
+    built = CollectorRegistry(DEFAULT_ALLOWLIST, consent, adapters={
+        "uk_companies_house": StubAdapter("Companies House"),
+        "us_sec_edgar": StubAdapter("SEC EDGAR"),
+        "fr_inpi_rne": StubAdapter("INPI RNE"),
+        "ky_general_registry": StubAdapter("Cayman GR"),  # not automatable -> manual only
+    }).build()
+    swept = ExposureRun(consent, register).run("client-1", entity_collectors=built["collectors"])
+    print(f"Full sweep: {len(built['collectors'])} automatable registers, "
+          f"manual-only={built['manual_only']}, records={len(swept['records'])}")
 
     # Foresight watchers (early detection), scoped to the client.
     register_feed = StubFeed([
