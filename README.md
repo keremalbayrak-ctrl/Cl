@@ -6,15 +6,17 @@ assemble about *them*, from public and semi-public records — so they can reduc
 and monitor it.
 
 It reads official registers and licensed providers, correlates what it finds,
-infers what is coming from published rules, and maintains a per-client exposure
-register.
+infers what is coming from published rules, runs early-detection watchers, and
+maintains a per-client exposure register.
 
 ## The invariant that makes this defensible
 
 Every query is seeded from the client's own declared data and scoped to the
 consenting client/family. **There is no entry point that accepts an arbitrary
 third-party target.** This is enforced in code (`guardrails.py`, `consent.py`),
-not just documented.
+not just documented. Expanding the source catalogue does not change this — a
+bigger allowlist only means more lawful public records can be read *about the
+client*, never about a non-client.
 
 ## The five constraints (enforced, not aspirational)
 
@@ -38,23 +40,50 @@ not just documented.
 These are not limits bolted on afterwards; the consent gate and the allowlist
 are the product.
 
+## Capabilities
+
+- **Source catalogue** (`allowlist.py`) — ~90 official registers / regulator
+  registers / licensed providers across the UK, US, EU, Asia, Middle East and
+  offshore centres, organised by jurisdiction and category. Each carries a
+  conservative `terms_permit_automation` flag; paid or access-restricted sources
+  are marked non-automatable so the base collector refuses to bulk-collect them
+  until integrated under their actual terms.
+- **Collectors** — Companies House (client's own entities), own-data breach
+  exposure, and own-identity sanctions/PEP screening. All gated by `base.py`.
+- **Counterparty due diligence** (`counterparty.py`) — *firm-level* public due
+  diligence on firms the client holds assets with (declared counterparties):
+  regulatory status, filed audit opinion, enforcement, sanctions. Surfaces
+  early-warning flags (e.g. qualified/adverse opinion, going concern). It is
+  anchored to the client's own holdings — **not** third-party profiling and
+  **not** a route to a firm's owners or anyone's wealth.
+- **Cross-referencing** (`resolver.py`) — name-variant/transliteration
+  resolution, address correlation, co-occurrence network mapping, with a
+  two-source confirmation rule. Correlates only records already collected.
+- **Regulatory-scope inference** (`inference/regulatory_scope.py`) — probability
+  a *firm* is in a published rule's scope, from public register attributes,
+  labelled "unconfirmed by firm".
+- **Foresight watchers** (`watchers/`) — register changes, counterparty
+  filings, sanctions-list updates → flags, each scoped to the client.
+- **Exposure register** (`exposure_register.py`) — per-client living record.
+
 ## Layout
 
 | Module | Role |
 | --- | --- |
 | `wealth_exposure/guardrails.py` | The hard constraints, as code. Everything routes through here. |
-| `wealth_exposure/consent.py` | `ConsentScope` — the source of truth for who/what may be queried. |
-| `wealth_exposure/allowlist.py` | The lawful source allowlist + per-source automation/rate-limit policy. |
-| `wealth_exposure/collectors/` | One collector per source (`companies_house`, own-data `breach_exposure`), all gated by `base.py`. |
-| `wealth_exposure/resolver.py` | Correlation with a two-source confirmation rule. |
-| `wealth_exposure/inference/regulatory_scope.py` | Firm-in-scope inference from published rules + public register attributes (labelled "unconfirmed by firm"). |
+| `wealth_exposure/consent.py` | `ConsentScope` — source of truth for who/what may be queried; owner attribution. |
+| `wealth_exposure/allowlist.py` | The lawful source catalogue + per-source automation/rate-limit policy. |
+| `wealth_exposure/collectors/` | `base.py` gate + `companies_house`, `breach_exposure`, `sanctions_screening`. |
+| `wealth_exposure/counterparty.py` | Firm-level counterparty due diligence (declared counterparties only). |
+| `wealth_exposure/resolver.py` | Cross-referencing with a two-source confirmation rule. |
+| `wealth_exposure/inference/regulatory_scope.py` | Firm-in-scope inference (labelled "unconfirmed by firm"). |
+| `wealth_exposure/watchers/` | Foresight watcher interface + concrete watchers + runner. |
 | `wealth_exposure/exposure_register.py` | Per-client living record. |
-| `wealth_exposure/watchers/` | Foresight watcher interface. |
 
 ## Run
 
 ```bash
-python -m pytest          # guardrail + module tests
+python -m pytest          # 41 guardrail + module tests
 python examples/demo.py   # end-to-end demo with stub providers (no network)
 ```
 

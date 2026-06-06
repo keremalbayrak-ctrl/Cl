@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-ALLOWED_KINDS = frozenset({"person", "entity", "asset", "identifier"})
+ALLOWED_KINDS = frozenset({"person", "entity", "asset", "identifier", "counterparty"})
 
 
 class GuardrailViolation(Exception):
@@ -22,8 +22,10 @@ class Subject:
     """A thing a query is about.
 
     Always the consenting client/family, or an entity/asset/identifier the
-    client has declared as their own. There is no representation here for an
-    arbitrary third-party target, by design.
+    client has declared as their own, or a "counterparty" firm the client
+    holds assets with (their own relationship, for firm-level due diligence).
+    There is no representation here for an arbitrary third-party target, by
+    design.
     """
 
     identifier: str

@@ -1,7 +1,9 @@
 """Runnable demo with stub providers — no network, no real data.
 
-Shows the pipeline wired up for a single consenting client, and shows the
-guardrail refusing an out-of-scope query.
+Wires the expanded pipeline for one consenting client: own-entity register read,
+own-data breach check, own-identity sanctions screening, counterparty due
+diligence (firm-level), foresight watchers (early detection), and
+cross-referencing — then shows the guardrail refusing an out-of-scope query.
 """
 from __future__ import annotations
 
@@ -14,74 +16,113 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from wealth_exposure.allowlist import DEFAULT_ALLOWLIST
 from wealth_exposure.collectors.breach_exposure import BreachExposureCollector
 from wealth_exposure.collectors.companies_house import CompaniesHouseCollector
+from wealth_exposure.collectors.sanctions_screening import SanctionsScreeningCollector
 from wealth_exposure.consent import ClientRecord, ConsentScope
+from wealth_exposure.counterparty import CounterpartyRiskAssessor
 from wealth_exposure.exposure_register import ExposureItem, ExposureRegister
 from wealth_exposure.guardrails import GuardrailViolation, Subject
 from wealth_exposure.inference.regulatory_scope import RuleScope, probability_in_scope
+from wealth_exposure.resolver import Resolver
+from wealth_exposure.watchers.feeds import CounterpartyFilingWatcher, RegisterChangeWatcher
+from wealth_exposure.watchers.runner import WatcherRunner
 
 
 class StubCompaniesHouseAPI:
-    def get_company(self, n):
-        return {"number": n, "name": "Client Holdings Ltd", "status": "active"}
-
-    def get_officers(self, n):
-        return [{"name": "A. Client", "role": "director"}]
-
-    def get_psc(self, n):
-        return [{"name": "A. Client",
-                 "kind": "individual-person-with-significant-control"}]
-
-    def get_charges(self, n):
-        return [{"lender": "Example Bank plc", "status": "outstanding"}]
+    def get_company(self, n): return {"number": n, "name": "Client Holdings Ltd", "status": "active"}
+    def get_officers(self, n): return [{"name": "A. Client", "role": "director"}]
+    def get_psc(self, n): return [{"name": "A. Client", "kind": "individual-person-with-significant-control"}]
+    def get_charges(self, n): return [{"lender": "Example Bank plc", "status": "outstanding"}]
 
 
-class StubLicensedBreachProvider:
+class StubBreachProvider:
     def check_own_exposure(self, identifier):
         return [{"breach": "ExampleCorp 2021", "data": ["email", "password_hash"]}]
 
 
+class StubScreening:
+    def screen(self, identifier, source_id): return []  # no sanctions / PEP match
+
+
+class StubCounterpartyDD:
+    def regulatory_status(self, firm): return {"status": "authorised", "regulator": "FCA"}
+    def latest_audit_opinion(self, firm): return {"opinion": "qualified", "going_concern": True, "year": 2025}
+    def enforcement_actions(self, firm): return []
+    def sanctions_hits(self, firm): return []
+
+
+class StubFeed:
+    def __init__(self, changes): self._changes = changes
+    def poll(self): return self._changes
+
+
 def main() -> None:
-    # 1. Consent scope: one verified client, their own entity + own identifier.
+    print(f"Lawful source catalogue: {len(DEFAULT_ALLOWLIST)} sources "
+          f"({len(DEFAULT_ALLOWLIST.automatable())} automatable)\n")
+
+    # Consent scope: one verified client; their own entity, identifier, counterparty.
     consent = ConsentScope()
     consent.add_client(ClientRecord("client-1", verified=True))
     consent.declare_entity("client-1", "12345678")
     consent.declare_identifier("client-1", "client@example.com")
+    consent.declare_counterparty("client-1", "bybit-fzco")  # a firm the client uses
 
     register = ExposureRegister()
 
-    # 2. Read the client's OWN company filing (public data about their entity).
+    # Own entity: public company filing.
     ch = CompaniesHouseCollector(DEFAULT_ALLOWLIST, consent, StubCompaniesHouseAPI())
     for rec in ch.collect(Subject("12345678", "entity")):
-        print("Companies House:", rec)
         if rec.get("charges"):
-            register.add(ExposureItem(
-                client_id="client-1",
-                source="uk_companies_house",
-                description="Outstanding charge reveals lender / leverage",
-                evidence={"charges": rec["charges"]},
-            ))
+            register.add(ExposureItem("client-1", "uk_companies_house",
+                                      "Outstanding charge reveals lender / leverage",
+                                      evidence={"charges": rec["charges"]}))
 
-    # 3. Check the client's OWN identifier for breach exposure (own data only).
-    breach = BreachExposureCollector(DEFAULT_ALLOWLIST, consent,
-                                     StubLicensedBreachProvider())
+    # Own identifier: breach exposure (own data only).
+    breach = BreachExposureCollector(DEFAULT_ALLOWLIST, consent, StubBreachProvider())
     for rec in breach.collect(Subject("client@example.com", "identifier")):
-        print("Breach (own data):", rec)
         if rec.get("exposure"):
-            register.add(ExposureItem(
-                client_id="client-1",
-                source="breach_licensed_provider",
-                description="Client credential found in known breach",
-                evidence={"exposure": rec["exposure"]},
-            ))
+            register.add(ExposureItem("client-1", "breach_licensed_provider",
+                                      "Client credential found in known breach",
+                                      evidence={"exposure": rec["exposure"]}))
 
-    # 4. Regulatory-scope inference about a FIRM, from public criteria only.
+    # Own identity: sanctions / PEP screening (own status only).
+    screen = SanctionsScreeningCollector(DEFAULT_ALLOWLIST, consent, "ofsi_sanctions", StubScreening())
+    print("Sanctions screening (own):", screen.collect(Subject("client-1", "person"))[0])
+
+    # Counterparty due diligence (firm-level, public sources only).
+    assessor = CounterpartyRiskAssessor(DEFAULT_ALLOWLIST, consent, StubCounterpartyDD(),
+                                        sources=["uk_fca_register", "uk_companies_house"])
+    cp = assessor.assess("bybit-fzco")
+    print("Counterparty risk:", cp["firm"], cp["risk_flags"])
+    for flag in cp["risk_flags"]:
+        register.add(ExposureItem("client-1", "counterparty_dd",
+                                  f"Counterparty risk: {flag} ({cp['firm']})",
+                                  evidence={"assessment": cp}))
+
+    # Regulatory-scope inference about a FIRM (public criteria only).
     rule = RuleScope("FCA-PS25-12-safeguarding", {"permission": "emoney_institution"})
-    firm_public_attrs = {"permission": "emoney_institution"}
-    print("Reg-scope inference:", probability_in_scope(rule, firm_public_attrs))
+    print("Reg-scope inference:", probability_in_scope(rule, {"permission": "emoney_institution"})["label"])
 
-    # 5. The guardrail in action: an out-of-scope query is refused.
+    # Foresight watchers (early detection), scoped to the client.
+    register_feed = StubFeed([
+        {"entity": "12345678", "summary": "New PSC filing on client's entity"},
+        {"entity": "99999999", "summary": "Change on an unrelated entity"},  # ignored
+    ])
+    cp_feed = StubFeed([{"firm": "bybit-fzco", "summary": "Qualified audit opinion filed"}])
+    WatcherRunner([
+        RegisterChangeWatcher(DEFAULT_ALLOWLIST, consent, register_feed),
+        CounterpartyFilingWatcher(DEFAULT_ALLOWLIST, consent, cp_feed),
+    ], register).run_once()
+
+    # Cross-referencing: name variants + co-occurrence network.
+    resolver = Resolver(consent)
+    print("Name variants:", resolver.resolve_name_variants(
+        ["Açme Holdings Ltd", "ACME, Inc.", "Beta Trading LLC"]))
+    print("Network edges:", resolver.build_network(
+        [{"nodes": ["A. Client", "12345678", "1 High St"]}]))
+
+    # Guardrail in action: an out-of-scope query is refused.
     try:
-        ch.collect(Subject("99999999", "entity"))  # not declared by the client
+        ch.collect(Subject("99999999", "entity"))
     except GuardrailViolation as e:
         print("Refused (as designed):", e)
 
